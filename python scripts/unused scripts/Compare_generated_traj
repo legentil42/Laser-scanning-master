@@ -1,0 +1,190 @@
+#%%
+from robodk import robolink    # RoboDK API
+from robodk import robomath    # Robot toolbox
+RDK = robolink.Robolink()
+from robodk.robomath import *
+import numpy as np
+from tkinter import *
+import ast
+import pptk
+import os
+
+
+def save_selected_points(L,L_SCAN,name = "Selected_points.txt"):
+    
+    if os.path.exists(name):
+        os.remove(name)
+
+    with open(name, 'w') as f:
+        for i in range(len(L)):
+            f.write("%s\n" % L_SCAN[L[i]])
+
+
+def quickconv(L):
+    x,y,z = [],[],[]
+    for i in range(len(L)):
+        x.append(L[i][0])
+        y.append(L[i][1])
+        z.append(L[i][2])
+    return np.array([x,y,z])
+
+
+
+def show_selected_and_traj(name = "Selected_points.txt"):
+    #import .txt
+    L_traj = []
+
+    with open(name, "r") as f:
+        good_points = []
+        for item in f:
+            if ast.literal_eval(item[:-1]) != [0,0,0]:
+                good_points.append(ast.literal_eval(item[:-1]))
+                traj_point = [good_points[-1][0],good_points[-1][1],good_points[-1][2]]
+                L_traj.append(traj_point) #remove points in [0,0,0]
+
+    #v = pptk.viewer(good_points)
+    #v.set(point_size=0.1)
+    return L_traj
+
+def selection():
+
+    with open("3DPC.txt", "r") as f:
+        L_SCAN = []
+        for item in f:
+            L_SCAN.append(ast.literal_eval(item[:-1]))
+
+
+    def save_points():
+        Selected = v1.get('selected')
+        print(Selected)
+        v1.close()
+        save_selected_points(Selected,L_SCAN)
+        
+        
+
+    v1 = pptk.viewer(L_SCAN)
+    v1.set(point_size=0.1)
+    # root window
+
+
+    # Creating the tkinter window
+    root = Tk()
+    root.geometry("200x100")
+
+    # Button for closing
+    exit_button = Button(root, text="Select", command=root.destroy)
+    exit_button.pack(pady=20)
+
+    root.mainloop()
+    save_points()
+    L_traj = show_selected_and_traj()
+    return L_traj,L_SCAN
+
+
+
+
+
+def calc_distances(p0, points):
+    return ((p0 - points)**2).sum(axis=1)
+
+
+def K_farthest(pts, K):
+    farthest_pts = np.zeros((K, 3))
+    farthest_pts[0] = pts[np.random.randint(len(pts))]
+    distances = calc_distances(farthest_pts[0], pts)
+    for i in range(1, K):
+        farthest_pts[i] = pts[np.argmax(distances)]
+        distances = np.minimum(distances, calc_distances(farthest_pts[i], pts))
+    return farthest_pts
+
+
+
+
+def getEquidistantPoints(p1, p2, parts):
+    return list(zip(np.linspace(p1[0], p2[0], parts+1),
+               np.linspace(p1[1], p2[1], parts+1),
+               np.linspace(p1[2], p2[2], parts+1),))
+
+
+
+
+
+
+
+
+
+
+def create_targets(L_calculated_traj):
+    prog = RDK.Item('Weld_Traj')
+    if (prog.Valid()):
+        RDK.Delete(prog)
+
+
+    Weld_traj = RDK.AddProgram("Weld_traj",RDK.Item("UR5"))
+
+
+
+    pose_home = robomath.Mat([[-1.000000,    -0.000000,    -0.000000,  -454.323000],
+                            [-0.000000,     1.000000,     0.000000,   -46.663000],
+                            [0.000000,     0.000000,    -1.000000,   575.212000 ],
+                            [0.000000,     0.000000,     0.000000,     1.000000]]) #home pose
+
+    RDK.AddTarget("home_start", itemparent=0, itemrobot=0)
+    cur_target = RDK.Item("home_start")
+
+    cur_target.setPose(pose_home)
+    cur_target.setVisible(False, False)
+    Weld_traj.MoveL(cur_target)
+    cur_target.setParentStatic(RDK.Item("Weld_Traj"))
+
+    L_final = L_calculated_traj
+    for i in range(len(L_calculated_traj)):
+        
+        RDK.AddTarget(str(L_final[i]), itemparent=0, itemrobot=0)
+        cur_target = RDK.Item(str(L_final[i]))
+
+        target_pose = robomath.Mat([[-1.000000,    -0.000000,    -0.000000,  float(L_final[i][0])],
+                            [-0.000000,     1.000000,     0.000000,   float(L_final[i][1])],
+                            [0.000000,     0.000000,    -1.000000,   float(L_final[i][2]) + 114.6 ],
+                            [0.000000,     0.000000,     0.000000,     1.000000]]) 
+
+        
+        cur_target.setPose(target_pose)
+        cur_target.setVisible(False, False)
+        Weld_traj.MoveL(cur_target)
+        cur_target.setParentStatic(RDK.Item("Weld_Traj"))
+
+    RDK.AddTarget("home_finish", itemparent=0, itemrobot=0)
+    cur_target = RDK.Item("home_finish")
+
+    cur_target.setPose(pose_home)
+    cur_target.setVisible(False, False)
+    Weld_traj.MoveL(cur_target)
+    cur_target.setParentStatic(RDK.Item("Weld_Traj"))
+
+
+
+
+
+
+L_traj,L_SCAN = selection()
+
+Farthest = K_farthest(L_traj,2)
+
+My_Line = getEquidistantPoints(Farthest[0],Farthest[1],20)
+My_Line = [list(My_Line[i]) for i in range(len(My_Line))]
+
+for i in range(len(My_Line)):
+    distances = calc_distances(np.array(My_Line[i]), np.array(L_SCAN))
+    closest_point = L_SCAN[np.argmin(distances)]
+    print(My_Line[i])
+    print(closest_point)
+    My_Line[i] = list(np.array(My_Line[i])*0.5+np.array(closest_point)*0.5)
+
+
+
+
+create_targets(My_Line)
+v1 = pptk.viewer(list(L_SCAN)+list(My_Line),len(L_SCAN)*[0]+len(My_Line)*[1])
+v1.set(point_size=0.2)
+
